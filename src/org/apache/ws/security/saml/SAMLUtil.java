@@ -99,7 +99,9 @@ public class SAMLUtil {
         byte[] key = pwcb.getKey();
         
         if (key != null) {
-            return new SAMLKeyInfo(assertion, key);
+            SAMLKeyInfo samlKeyInfo = new SAMLKeyInfo(assertion, key);
+            samlKeyInfo.setSecretFromCallback(true);
+            return samlKeyInfo;
         } else {
             Iterator statements = assertion.getStatements();
             while (statements.hasNext()) {
@@ -120,11 +122,13 @@ public class SAMLUtil {
                         QName el = new QName(child.getNamespaceURI(), child.getLocalName());
                         if (el.equals(WSSecurityEngine.ENCRYPTED_KEY)) {
                             
+                            verifySecretKeyAssertion(assertion, crypto);
                             EncryptedKeyProcessor proc = new EncryptedKeyProcessor();
                             proc.handleEncryptedKey((Element)child, cb, crypto, null);
                             
                             return new SAMLKeyInfo(assertion, proc.getDecryptedBytes());
                         } else if (el.equals(new QName(WSConstants.WST_NS, "BinarySecret"))) {
+                            verifySecretKeyAssertion(assertion, crypto);
                             Text txt = (Text)child.getFirstChild();
                             return new SAMLKeyInfo(assertion, Base64.decode(txt.getData()));
                         }
@@ -276,4 +280,38 @@ public class SAMLUtil {
         return id;
     }
 
+
+    /**
+     * A secret key in the Subject KeyInfo is attacker-chosen unless the assertion was signed
+     * by a trusted issuer. 1.5.9 never checks SAML signatures, so check it here before the
+     * key is used (1.6.0's SamlAssertionValidator requires holder-of-key assertions to be signed).
+     */
+    private static void verifySecretKeyAssertion(SAMLAssertion assertion, Crypto crypto)
+        throws WSSecurityException {
+        if (!assertion.isSigned()) {
+            throw new WSSecurityException(WSSecurityException.FAILED_CHECK, "invalidSAMLsecurity");
+        }
+        X509Certificate cert = null;
+        try {
+            Iterator certs = assertion.getX509Certificates();
+            if (certs != null && certs.hasNext()) {
+                cert = (X509Certificate) certs.next();
+            }
+            if (cert == null) {
+                throw new WSSecurityException(WSSecurityException.FAILED_CHECK, "invalidSAMLsecurity");
+            }
+            assertion.verify(cert);
+        } catch (SAMLException e) {
+            throw new WSSecurityException(
+                WSSecurityException.FAILED_CHECK, "invalidSAMLsecurity", null, e
+            );
+        }
+        if (crypto == null) {
+            throw new WSSecurityException(WSSecurityException.FAILURE, "noSigCryptoFile");
+        }
+        if (crypto.getAliasForX509Cert(cert) == null
+            && !crypto.validateCertPath(new X509Certificate[] {cert})) {
+            throw new WSSecurityException(WSSecurityException.FAILED_CHECK, "invalidSAMLsecurity");
+        }
+    }
 }

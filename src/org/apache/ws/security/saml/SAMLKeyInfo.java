@@ -48,6 +48,11 @@ public class SAMLKeyInfo {
      * SAMLAssertion
      */
     SAMLAssertion assertion;
+
+    /**
+     * Whether the secret came from the application's CallbackHandler rather than the assertion
+     */
+    private boolean secretFromCallback;
     
     public SAMLKeyInfo(SAMLAssertion assertions, X509Certificate[] certs) {
         this.certs = certs;
@@ -78,5 +83,13 @@ public class SAMLKeyInfo {
 
     public SAMLAssertion getAssertion() {
         return assertion;
+    }
+
+    public boolean isSecretFromCallback() {
+        return secretFromCallback;
+    }
+
+    public void setSecretFromCallback(boolean secretFromCallback) {
+        this.secretFromCallback = secretFromCallback;
     }
 }

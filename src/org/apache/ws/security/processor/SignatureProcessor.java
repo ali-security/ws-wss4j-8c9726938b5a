@@ -58,6 +58,8 @@ import org.apache.xml.security.signature.XMLSignatureInput;
 import org.apache.xml.security.transforms.Transform;
 import org.apache.xml.security.transforms.Transforms;
 import org.opensaml.SAMLAssertion;
+import org.opensaml.SAMLSubject;
+import org.opensaml.SAMLSubjectStatement;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 
@@ -70,6 +72,7 @@ import java.security.cert.CertificateExpiredException;
 import java.security.cert.CertificateNotYetValidException;
 import java.security.cert.X509Certificate;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.Vector;
@@ -269,6 +272,7 @@ public class SignatureProcessor implements Processor {
                             );
                         }
                         samlKi = SAMLUtil.getSAMLKeyInfo(token, crypto, cb);
+                        checkSAMLSecretKey(samlKi);
                         certs = samlKi.getCerts();
                         secretKey = samlKi.getSecret();
 
@@ -347,6 +351,7 @@ public class SignatureProcessor implements Processor {
                     }
                     SAMLTokenProcessor samlp = (SAMLTokenProcessor) processor;
                     samlKi = SAMLUtil.getSAMLKeyInfo(samlp.getSamlTokenElement(), crypto, cb);
+                    checkSAMLSecretKey(samlKi);
                     certs = samlKi.getCerts();
                     secretKey = samlKi.getSecret();
                     publicKey = samlKi.getPublicKey();
@@ -385,6 +390,7 @@ public class SignatureProcessor implements Processor {
                         );
                     }
                     samlKi = SAMLUtil.getSAMLKeyInfo(token, crypto, cb);
+                    checkSAMLSecretKey(samlKi);
                     certs = samlKi.getCerts();
                     secretKey = samlKi.getSecret();
                     publicKey = samlKi.getPublicKey();
@@ -670,4 +676,40 @@ public class SignatureProcessor implements Processor {
         return signatureId;
     }
 
+
+    /**
+     * A raw secret key from the Subject KeyInfo of a non-holder-of-key assertion (e.g.
+     * sender-vouches) has no proof-of-possession meaning, and no trust anchor is ever
+     * checked for it. Using such a key to verify a signature is a self-referential check
+     * an attacker can satisfy by embedding their own key in an unsigned assertion.
+     */
+    private static void checkSAMLSecretKey(SAMLKeyInfo samlKi) throws WSSecurityException {
+        byte[] secret = samlKi.getSecret();
+        if (secret == null || secret.length == 0 || samlKi.isSecretFromCallback()) {
+            return;
+        }
+        if (!SAMLSubject.CONF_HOLDER_KEY.equals(getConfirmationMethod(samlKi.getAssertion()))) {
+            throw new WSSecurityException(WSSecurityException.FAILED_CHECK, "invalidSAMLsecurity");
+        }
+    }
+
+    private static String getConfirmationMethod(SAMLAssertion assertion) {
+        if (assertion == null) {
+            return null;
+        }
+        Iterator statements = assertion.getStatements();
+        while (statements.hasNext()) {
+            Object stmt = statements.next();
+            if (stmt instanceof SAMLSubjectStatement) {
+                SAMLSubject subject = ((SAMLSubjectStatement) stmt).getSubject();
+                if (subject != null) {
+                    Iterator methods = subject.getConfirmationMethods();
+                    if (methods.hasNext()) {
+                        return (String) methods.next();
+                    }
+                }
+            }
+        }
+        return null;
+    }
 }

@@ -247,7 +247,19 @@ public class ReferenceListProcessor implements Processor {
         if (parent.getLocalName().equals(WSConstants.ENCRYPTED_HEADER)
             && parent.getNamespaceURI().equals(WSConstants.WSSE11_NS)) {
                 
-            Node decryptedHeader = parent.getFirstChild();
+            // The decrypted node sits where the EncryptedData was, which is not necessarily
+            // the wrapper's first child - anything else there was never encrypted.
+            Node decryptedHeader;
+            if (content) {
+                decryptedHeader = encData;
+            } else if (previousSibling == null) {
+                decryptedHeader = parent.getFirstChild();
+            } else {
+                decryptedHeader = previousSibling.getNextSibling();
+            }
+            if (decryptedHeader == null || Node.ELEMENT_NODE != decryptedHeader.getNodeType()) {
+                throw new WSSecurityException(WSSecurityException.FAILED_CHECK);
+            }
             Element decryptedHeaderClone = (Element)decryptedHeader.cloneNode(true);            
             parent.getParentNode().appendChild(decryptedHeaderClone);
             parent.getParentNode().removeChild(parent);

@@ -56,6 +56,16 @@ public class DerivedKeyTokenProcessor implements Processor {
     private DerivedKeyToken dkt;
     
     private byte[] secret;
+    /**
+     * The minimum length in bytes of a derived key (128 bits).
+     */
+    public static final int MINIMUM_DERIVED_KEY_LENGTH = 16;
+
+    /**
+     * The maximum length in bytes of a derived key.
+     */
+    public static final int MAXIMUM_DERIVED_KEY_LENGTH = 512;
+
     private int length;
     private int offset;
     private byte[] nonce;
@@ -100,6 +110,15 @@ public class DerivedKeyTokenProcessor implements Processor {
     }
 
     private void deriveKey() throws WSSecurityException{
+        // wsc:Length is attacker-controlled: P_SHA-1 allocates offset+length bytes and runs
+        // one HMAC per 20 output bytes, and a very short key is trivially brute-forced.
+        if (length < MINIMUM_DERIVED_KEY_LENGTH || length > MAXIMUM_DERIVED_KEY_LENGTH) {
+            throw new WSSecurityException(
+                WSSecurityException.INVALID_SECURITY, "unsupportedKeyId",
+                new Object[] {"Derived key length of " + length + " bytes is outside the allowed range ["
+                    + MINIMUM_DERIVED_KEY_LENGTH + ", " + MAXIMUM_DERIVED_KEY_LENGTH + "]"}
+            );
+        }
         try {
             DerivationAlgorithm algo = AlgoFactory.getInstance(this.algorithm);
             byte[] labelBytes = null;

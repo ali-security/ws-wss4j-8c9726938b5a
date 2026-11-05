@@ -49,6 +49,7 @@ import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.xml.namespace.QName;
 
 import java.io.IOException;
+import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
@@ -387,20 +388,28 @@ public class EncryptedKeyProcessor implements Processor {
      */
     private static byte[] getRandomKey(List dataRefURIs, Document doc) throws WSSecurityException {
         try {
-            String alg = "AES";
-            int size = 128;
-            if (!dataRefURIs.isEmpty()) {
-                String uri = (String)dataRefURIs.iterator().next();
-                Element ee = ReferenceListProcessor.findEncryptedDataElement(doc, uri);
-                String algorithmURI = X509Util.getEncAlgo(ee);
-                alg = JCEMapper.getJCEKeyAlgorithmFromURI(algorithmURI);
-                size = JCEMapper.getKeyLengthFromURI(algorithmURI);
+            try {
+                String alg = "AES";
+                int size = 128;
+                if (!dataRefURIs.isEmpty()) {
+                    String uri = (String)dataRefURIs.iterator().next();
+                    Element ee = ReferenceListProcessor.findEncryptedDataElement(doc, uri);
+                    String algorithmURI = X509Util.getEncAlgo(ee);
+                    alg = JCEMapper.getJCEKeyAlgorithmFromURI(algorithmURI);
+                    size = JCEMapper.getKeyLengthFromURI(algorithmURI);
+                }
+                KeyGenerator kgen = KeyGenerator.getInstance(alg);
+                kgen.init(size);
+                SecretKey k = kgen.generateKey();
+                return k.getEncoded();
+            } catch (Throwable t) {
+                // Fallback to just using AES to avoid attacks on EncryptedData algorithms
+                KeyGenerator kgen = KeyGenerator.getInstance("AES");
+                kgen.init(128);
+                SecretKey k = kgen.generateKey();
+                return k.getEncoded();
             }
-            KeyGenerator kgen = KeyGenerator.getInstance(alg);
-            kgen.init(size);
-            SecretKey k = kgen.generateKey();
-            return k.getEncoded();
-        } catch (Exception ex) {
+        } catch (NoSuchAlgorithmException ex) {
             throw new WSSecurityException(WSSecurityException.FAILED_CHECK, null, null, ex);
         }
     }

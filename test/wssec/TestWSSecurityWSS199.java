@@ -122,7 +122,14 @@ public class TestWSSecurityWSS199 extends TestCase implements CallbackHandler {
         WSSConfig wssConfig = secEngine.getWssConfig();
         wssConfig.setAllowNamespaceQualifiedPasswordTypes(true);
         secEngine.setWssConfig(wssConfig);
-        verify(doc);
+        try {
+            verify(doc);
+        } finally {
+            // sealed: the default WSSConfig is a shared singleton; restore the
+            // flag so testNamespaceQualifiedTypeRejected does not depend on
+            // JUnit 3 method order (it runs after this test on JDK 8)
+            wssConfig.setAllowNamespaceQualifiedPasswordTypes(false);
+        }
     }
     
     

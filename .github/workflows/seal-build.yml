@@ -1,0 +1,120 @@
+# Sealed build of Apache WSS4J 1.5.9. Upstream (SVN-era, 2010) has no GitHub
+# Actions CI; this workflow reproduces its Maven 2 build (`mvn package`, which
+# runs the JUnit 3 suite wired through surefire's **/PackageTests.java include).
+name: seal-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Surefire -Dtest selector; empty runs the full suite"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # The release was built on 2010-09-28 (jar entry dates / Bnd-LastModified).
+      # The bundled test keystores (keys/*.jks) hold certificates that expired
+      # in 2019, so the signature tests need a 2010 clock.
+      SEAL_FAKETIME: "@2010-09-28 12:00:00"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 8 (compiles with the pom's -source/-target 1.3)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+
+      - name: Install libfaketime
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q faketime
+          ls -l /usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1
+
+      - name: Install Maven 2.2.1
+        run: |
+          mkdir -p "$RUNNER_TEMP/tools"
+          curl -fsSL https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/2.2.1/apache-maven-2.2.1-bin.tar.gz \
+            | tar xz -C "$RUNNER_TEMP/tools"
+          echo "$RUNNER_TEMP/tools/apache-maven-2.2.1/bin" >> "$GITHUB_PATH"
+          # Maven 2's built-in http://repo1.maven.org central is gone; mirror to HTTPS Central.
+          cat > "$RUNNER_TEMP/settings.xml" <<'EOF'
+          <settings>
+            <mirrors>
+              <mirror>
+                <id>central-https</id>
+                <mirrorOf>*</mirrorOf>
+                <url>https://repo.maven.apache.org/maven2</url>
+              </mirror>
+            </mirrors>
+          </settings>
+          EOF
+          # Test-JVM wrapper used by the online pass: surefire forks this
+          # instead of plain java so only the tests see the 2010 clock (Maven
+          # itself needs the real clock for TLS to Central).
+          cat > "$RUNNER_TEMP/java-faketime" <<'EOF'
+          #!/bin/sh
+          export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1
+          export FAKETIME="$SEAL_FAKETIME"
+          export FAKETIME_DONT_FAKE_MONOTONIC=1
+          exec "$JAVA_HOME/bin/java" "$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/java-faketime"
+          mvn -v
+
+      - name: Build and test (online pass, resolves all dependencies)
+        env:
+          TEST_FILTER: ${{ inputs.test-filter }}
+        run: |
+          EXTRA=""
+          if [ -n "$TEST_FILTER" ]; then EXTRA="-Dtest=$TEST_FILTER -DfailIfNoTests=false"; fi
+          mvn -B -s "$RUNNER_TEMP/settings.xml" \
+            -Djvm="$RUNNER_TEMP/java-faketime" $EXTRA clean package
+
+      - name: Rebuild and test offline under the release-date clock
+        # remote-resources-plugin stamps the build year into META-INF/NOTICE
+        # ("Copyright 2004-<year>"); building under the 2010 clock reproduces
+        # the published NOTICE. Offline because TLS fails with a 2010 clock.
+        env:
+          TEST_FILTER: ${{ inputs.test-filter }}
+        run: |
+          EXTRA=""
+          if [ -n "$TEST_FILTER" ]; then EXTRA="-Dtest=$TEST_FILTER -DfailIfNoTests=false"; fi
+          LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1 \
+          FAKETIME="$SEAL_FAKETIME" FAKETIME_DONT_FAKE_MONOTONIC=1 \
+            mvn -o -B -s "$RUNNER_TEMP/settings.xml" $EXTRA clean package
+
+      - name: Print per-test results
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import glob, xml.etree.ElementTree as ET
+          total = passed = 0
+          for f in sorted(glob.glob("target/surefire-reports/TEST-*.xml")):
+              root = ET.parse(f).getroot()
+              print("Suite %s: tests=%s failures=%s errors=%s skipped=%s" % (
+                  root.get("name"), root.get("tests"), root.get("failures"),
+                  root.get("errors"), root.get("skipped")))
+              for tc in root.iter("testcase"):
+                  total += 1
+                  status = "PASSED"
+                  for kind in ("failure", "error", "skipped"):
+                      el = tc.find(kind)
+                      if el is not None:
+                          status = "%s: %s" % (kind.upper(), el.get("message"))
+                  if status == "PASSED":
+                      passed += 1
+                  print("  %s.%s ... %s" % (tc.get("classname"), tc.get("name"), status))
+          print("TOTAL testcases: %d, passed: %d" % (total, passed))
+          EOF
+
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: wss4j-jar
+          path: target/wss4j-1.5.9.jar
+          if-no-files-found: error
